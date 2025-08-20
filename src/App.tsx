@@ -4,19 +4,36 @@ import { TravelPreferencesForm } from './components/TravelPreferencesForm';
 import { TravelPlanCard } from './components/TravelPlanCard';
 import { TravelPlanDetails } from './components/TravelPlanDetails';
 import { BookingModal } from './components/BookingModal';
+import { Header } from './components/Header';
+import { AuthModal } from './components/AuthModals';
 import { mlTravelEngine } from './utils/mlTravelEngine';
+import { travelAPI } from './services/api';
+import { authService } from './services/auth';
+import { paymentService } from './services/payment';
 import { TravelPreferences, TravelPlan } from './types/travel';
 
 function App() {
+  // Core app state
   const [isLoading, setIsLoading] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
   const [recommendations, setRecommendations] = useState<TravelPlan[]>([]);
   const [selectedPlan, setSelectedPlan] = useState<TravelPlan | null>(null);
   const [bookingPlan, setBookingPlan] = useState<TravelPlan | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
+  
+  // Authentication state
+  const [user, setUser] = useState(authService.getCurrentUser());
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalType, setAuthModalType] = useState<'login' | 'signup'>('login');
 
   useEffect(() => {
     initializeML();
+    
+    // Check if user is already logged in
+    const currentUser = authService.getCurrentUser();
+    if (currentUser) {
+      setUser(currentUser);
+    }
   }, []);
 
   const initializeML = async () => {
@@ -31,10 +48,42 @@ function App() {
     }
   };
 
+  // Authentication handlers
+  const handleOpenAuth = (type: 'login' | 'signup') => {
+    setAuthModalType(type);
+    setAuthModalOpen(true);
+  };
+  
+  const handleAuthSuccess = () => {
+    setAuthModalOpen(false);
+    setUser(authService.getCurrentUser());
+  };
+  
+  const handleLogout = async () => {
+    await authService.logout();
+    setUser(null);
+  };
+  
+  const handleSwitchAuthMode = () => {
+    setAuthModalType(authModalType === 'login' ? 'signup' : 'login');
+  };
+  
+  // Travel preferences submission handler
   const handlePreferencesSubmit = async (preferences: TravelPreferences) => {
     setIsLoading(true);
     try {
-      const plans = await mlTravelEngine.generateRecommendations(preferences);
+      // Try to get recommendations from API first
+      let plans: TravelPlan[] = [];
+      
+      if (authService.isAuthenticated()) {
+        // If user is logged in, try to get personalized recommendations from API
+        plans = await travelAPI.getRecommendations(preferences);
+      }
+      
+      // If API call failed or returned no results, use ML engine as fallback
+      if (plans.length === 0) {
+        plans = await mlTravelEngine.generateRecommendations(preferences);
+      }
       
       // Optimize pricing for each plan
       const optimizedPlans = await Promise.all(
@@ -47,6 +96,50 @@ function App() {
       setRecommendations(optimizedPlans);
     } catch (error) {
       console.error('Failed to generate recommendations:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Booking confirmation handler
+  const handleBookingConfirm = async (bookingData: any) => {
+    try {
+      setIsLoading(true);
+      
+      // Process payment
+      const paymentResult = await paymentService.processPayment(bookingPlan!, {
+        cardNumber: bookingData.cardNumber,
+        expiryDate: bookingData.expiryDate,
+        cvv: bookingData.cvv,
+        cardholderName: `${bookingData.firstName} ${bookingData.lastName}`,
+        billingAddress: bookingData.billingAddress
+      });
+      
+      if (paymentResult.success) {
+        // Create booking in API
+        const bookingResult = await travelAPI.bookTrip({
+          ...bookingData,
+          plan: bookingPlan,
+          paymentId: paymentResult.transactionId,
+          userId: user?.id
+        });
+        
+        if (bookingResult.success) {
+          setBookingPlan(null);
+          setShowSuccess(true);
+        } else {
+          // Handle booking error
+          console.error('Booking failed:', bookingResult.error);
+          alert(`Booking failed: ${bookingResult.error}`);
+        }
+      } else {
+        // Handle payment error
+        console.error('Payment failed:', paymentResult.error);
+        alert(`Payment failed: ${paymentResult.error}`);
+      }
+    } catch (error) {
+      console.error('Error during booking:', error);
+      alert('An unexpected error occurred during booking');
     } finally {
       setIsLoading(false);
     }
@@ -75,6 +168,14 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
+      {/* Header */}
+      <Header 
+        user={user}
+        onLogin={() => handleOpenAuth('login')}
+        onSignup={() => handleOpenAuth('signup')}
+        onLogout={handleLogout}
+      />
+      
       {/* Success Notification */}
       {showSuccess && (
         <div className="fixed top-4 right-4 z-50 bg-green-500 text-white px-6 py-3 rounded-xl shadow-lg flex items-center space-x-2 animate-slide-in">
@@ -250,6 +351,15 @@ function App() {
           onConfirm={handleBookingConfirm}
         />
       )}
+      
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={authModalOpen}
+        type={authModalType}
+        onClose={() => setAuthModalOpen(false)}
+        onSuccess={handleAuthSuccess}
+        onSwitchMode={handleSwitchAuthMode}
+      />
     </div>
   );
 }
