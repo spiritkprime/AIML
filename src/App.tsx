@@ -153,12 +153,7 @@ function App() {
     setBookingPlan(plan);
   };
 
-  const handleBookingConfirm = (bookingData: any) => {
-    console.log('Booking confirmed:', bookingData);
-    setBookingPlan(null);
-    setShowSuccess(true);
-    setTimeout(() => setShowSuccess(false), 5000);
-  };
+  // Removed duplicate handleBookingConfirm function
 
   const resetApp = () => {
     setRecommendations([]);
